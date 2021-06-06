@@ -165,7 +165,7 @@ class GhidraCastXMLLoader:
                     # and element.attrib['file'] in self.selectedFiles:
                 dataType = self.getDataType(element)
                 if dataType != None:
-                    self.dtMgr.resolve(dataType, DataTypeConflictHandler.REPLACE_EMPTY_STRUCTS_OR_RENAME_AND_ADD_HANDLER)
+                    self.dtMgr.resolve(dataType, DataTypeConflictHandler.KEEP_HANDLER)
         print("Done.")            
         
         self.dtMgr.endTransaction(self.transation, True)
@@ -352,7 +352,8 @@ class GhidraCastXMLLoader:
         
         # These will allow Ghidra to pack and align our data types to our program's specs.
         # Unused for now. Let's respect what we have from CastXML.
-        #structureDataType.setMinimumAlignment(structAlign)
+        if structAlign:
+            structureDataType.setExplicitMinimumAlignment(structAlign)
         #structureDataType.setPackingValue(structAlign)
         
         self.recordTypeForId(element.attrib['id'], structureDataType)
@@ -368,7 +369,10 @@ class GhidraCastXMLLoader:
                     baseOffset = int(baseElement.attrib['offset'])
                 baseName = "base" + str(i) + "_" + str(baseOffset)
                 baseLength = baseType.getLength()
-                structureDataType.replaceAtOffset(baseOffset, baseType, baseLength, baseName, hex(baseOffset))
+                try:
+                    structureDataType.replaceAtOffset(baseOffset, baseType, baseLength, baseName, hex(baseOffset))
+                except JavaException as je:
+                    print("oops")
                 
         # Add VTable pointer
         if 'abstract' in element.attrib and 'bases' not in element.attrib:
@@ -397,7 +401,7 @@ class GhidraCastXMLLoader:
                     continue
                 
                 # TODO: check if at end of structure and check if structure already has flexible array
-                if typeElement.tag == "ArrayType" and int(typeElement.attrib['max']) == -1:
+                if typeElement.tag == "ArrayType" and typeElement.attrib['max'] and int(typeElement.attrib['max']) == -1:
                     # TODO: check if valid arrayDataType
                     arrayElement = self.getTypeInfoElementById(typeElement.attrib['type'])
                     arrayDataType = self.getDataType(arrayElement)
@@ -438,8 +442,29 @@ class GhidraCastXMLLoader:
                             bitFieldOffset = -1
                             bitFieldTotalSize = 0
                     else:
-                        structureDataType.replaceAtOffset(fieldOffset, fieldDataType, fieldDataType.getLength(), fieldName, hex(fieldOffset) + " bytes")
-            
+                        try:
+                            # Replace the existing component with a byte just to ensure it's defined?
+                            structureDataType.replaceAtOffset(fieldOffset, UnsignedCharDataType(), 1, fieldName, hex(fieldOffset))
+                            # Now perform the real replacement which can safely grow the structure as necessary
+                            structureDataType.replaceAtOffset(fieldOffset, fieldDataType, fieldDataType.getLength(), fieldName, hex(fieldOffset))
+                        except JavaException as e:
+                            
+                            # Check to see if the field has been defined:
+                            origDtc = structureDataType.getComponentAt(fieldOffset)
+                            
+                            print structName + " -> " + fieldName
+                            print "structSize: " + str(structureDataType.getLength())
+                            print "fieldOffset: " + str(fieldOffset)
+                            print "fieldDataType: " + str(fieldDataType)
+                            print "fieldDataTypeSize: " + str(fieldDataType.getLength())
+                            print "fieldName: " + str(fieldName)
+                            print "originalOrdinal: " + str(origDtc.getOrdinal())
+                            print "numComponents: " + str(structureDataType.getNumDefinedComponents())
+                            print "origDtcName: " + str(origDtc.getDataType().getName())
+                            print "origDtcLength: " + str(origDtc.getLength())
+                            print e
+                            raise e
+                        
         return structureDataType
     
     
@@ -714,7 +739,7 @@ class GhidraCastXMLLoader:
             fundamentalType = None
             if typeName == "void":
                 fundamentalType = VoidDataType.dataType
-            elif typeName == "bool":
+            elif typeName == "bool" or typeName == "_Bool":
                 fundamentalType = BooleanDataType.dataType
             elif typeName == "char":
                 fundamentalType = CharDataType.dataType
